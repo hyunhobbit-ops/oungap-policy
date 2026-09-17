@@ -1,0 +1,39 @@
+# 오운값 Supabase 프로젝트가 무료 플랜 미사용 자동중지에 걸리지 않게 주기적으로 깨운다.
+# 중지되면 출시된 앱에서 로그인·동기화·회원 탈퇴가 전부 실패한다.
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "0 3 */3 * *"   # 3일마다 03:00 UTC (한국 정오)
+  workflow_dispatch:         # 수동 실행도 가능
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Supabase 핑 (실제 DB 조회로 활동 기록을 남긴다)
+        env:
+          URL: https://kkikiaokybhmfoksaoep.supabase.co
+          ANON: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANON:-}" ]; then
+            echo "::error::SUPABASE_ANON_KEY 시크릿이 없습니다"
+            exit 1
+          fi
+
+          code=$(curl -sS -m 30 -o /tmp/out.txt -w "%{http_code}" \
+            "$URL/rest/v1/memberships?select=id&limit=1" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+
+          echo "REST 응답: HTTP $code"
+          head -c 200 /tmp/out.txt || true
+          echo
+
+          # 200(빈 배열, RLS로 걸러짐) 이면 정상. 401/403 도 서버는 살아 있다는 뜻.
+          case "$code" in
+            200|401|403) echo "✅ 프로젝트 살아 있음" ;;
+            000) echo "::error::호스트 응답 없음 — 프로젝트가 중지·삭제됐을 수 있습니다"; exit 1 ;;
+            5*)  echo "::error::서버 오류 $code — 복구 중이거나 장애"; exit 1 ;;
+            *)   echo "::warning::예상 밖 응답 $code" ;;
+          esac
